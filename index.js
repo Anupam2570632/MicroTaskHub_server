@@ -1,5 +1,5 @@
 const express = require("express");
-const cors = require('cors')
+const cors = require("cors");
 const app = express();
 
 const port = 3000;
@@ -7,14 +7,13 @@ require("dotenv").config();
 
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: ["http://localhost:5173", "https://microtaskhub.netlify.app"],
   })
 );
 app.use(express.json());
 
 const { MongoClient, ServerApiVersion } = require("mongodb");
 
-console.log(process.env.DB_USER, process.env.DB_PASS);
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.oeipnk8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -38,8 +37,8 @@ async function run() {
     });
 
     app.post("/users", async (req, res) => {
-      const user = req.body;
-      const query = { email: user.email };
+      const { name, email, role, imageUrl } = req.body;
+      const query = { email: email };
 
       const existingUser = await usersCollection.findOne(query);
 
@@ -47,8 +46,78 @@ async function run() {
         return res.send({ message: "User already exists" });
       }
 
-      const result = await usersCollection.insertOne(user);
+      const newUser = {
+        fullName: name,
+        email,
+        role,
+        profileImage: imageUrl,
+        coins: 10,
+        createdAt: new Date(),
+      };
+
+      const result = await usersCollection.insertOne(newUser);
       res.send(result);
+    });
+
+    app.post("/register", async (req, res) => {
+      try {
+        const { fullName, email, role, profileImage } = req.body;
+
+        console.log(profileImage);
+
+        // Validate input
+        if (!fullName || !email || !role) {
+          return res.status(400).json({ message: "All fields are required" });
+        }
+
+        const existingUser = await usersCollection.findOne({ email });
+
+        if (existingUser) {
+          return res.status(409).json({ message: "Email already exists" });
+        }
+
+        const coins = role === "Worker" ? 10 : 20;
+
+        // Create new user
+        const newUser = {
+          fullName,
+          email,
+          role,
+          profileImage: profileImage || "",
+          coins,
+          createdAt: new Date(),
+        };
+
+        const result = await usersCollection.insertOne(newUser);
+
+        res.status(201).json({
+          message: "User registered successfully!",
+          user: {
+            id: result.insertedId,
+            fullName,
+            email,
+            role,
+            profileImage,
+            coins,
+          },
+        });
+      } catch (error) {
+        console.error("Registration Error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.get("/user", async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        const serverData = await usersCollection.find({ email }).toArray();
+
+        res.send(serverData);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Server error" });
+      }
     });
 
     await client.db("admin").command({ ping: 1 });
