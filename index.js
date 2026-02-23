@@ -7,12 +7,17 @@ require("dotenv").config();
 
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://microtaskhub.netlify.app"],
-  })
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "https://microtaskhub.netlify.app",
+    ],
+    credentials: true,
+  }),
 );
 app.use(express.json());
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.oeipnk8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -31,6 +36,7 @@ async function run() {
     // Send a ping to confirm a successful connection
 
     const usersCollection = client.db("MicroTaskHub").collection("users");
+    const tasksCollection = client.db("MicroTaskHub").collection("tasks");
 
     app.get("/", (req, res) => {
       res.send("HEllo......");
@@ -62,8 +68,6 @@ async function run() {
     app.post("/register", async (req, res) => {
       try {
         const { fullName, email, role, profileImage } = req.body;
-
-        console.log(profileImage);
 
         // Validate input
         if (!fullName || !email || !role) {
@@ -111,7 +115,7 @@ async function run() {
       try {
         const email = req.query.email;
 
-        const serverData = await usersCollection.find({ email }).toArray();
+        const serverData = await usersCollection.findOne({ email });
 
         res.send(serverData);
       } catch (error) {
@@ -120,9 +124,101 @@ async function run() {
       }
     });
 
+    app.post("/createTasks", async (req, res) => {
+      const session = client.startSession();
+
+      try {
+        const { creator_email, task_quantity, payable_amount, ...taskData } =
+          req.body;
+
+        const totalCost = task_quantity * payable_amount;
+
+        session.startTransaction();
+
+        // 1️⃣ Find user
+        const user = await usersCollection.findOne(
+          { email: creator_email },
+          { session },
+        );
+
+        if (!user) {
+          await session.abortTransaction();
+          return res.status(404).send({ message: "User not found" });
+        }
+
+        if (user.coins < totalCost) {
+          await session.abortTransaction();
+          return res.status(400).send({ message: "Insufficient coins" });
+        }
+
+        // 2️⃣ Deduct coins
+        await usersCollection.updateOne(
+          { email: creator_email },
+          { $inc: { coins: -totalCost } },
+          { session },
+        );
+
+        // 3️⃣ Create task
+        const task = {
+          ...taskData,
+          creator_email,
+          task_quantity,
+          payable_amount,
+          total_cost: totalCost,
+          status: "active",
+          createdAt: new Date(),
+        };
+
+        const result = await tasksCollection.insertOne(task, { session });
+
+        await session.commitTransaction();
+
+        res.send({
+          success: true,
+          taskId: result.insertedId,
+          remainingCoins: user.coins - totalCost,
+        });
+      } catch (error) {
+        await session.abortTransaction();
+        res.status(500).send({ message: "Task creation failed" });
+      } finally {
+        await session.endSession();
+      }
+    });
+
+    //get all tasks api
+    app.get("/getTasks", async (req, res) => {
+      const tasks = await tasksCollection.find().toArray();
+      res.send(tasks);
+    });
+
+    //get specific task with id
+    app.get("/tasks/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        // Validate ObjectId
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid Task ID" });
+        }
+
+        const query = { _id: new ObjectId(id) };
+        const task = await tasksCollection.findOne(query);
+
+        if (!task) {
+          return res.status(404).send({ message: "Task Not Found" });
+        }
+
+        res.send(task);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Server Error" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
     // Ensures that the client will close when you finish/error
