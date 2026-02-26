@@ -37,7 +37,12 @@ async function run() {
 
     const usersCollection = client.db("MicroTaskHub").collection("users");
     const tasksCollection = client.db("MicroTaskHub").collection("tasks");
-    const submissionsCollection = client.db("MicroTaskHub").collection("submissions");
+    const withdrawCollection = client
+      .db("MicroTaskHub")
+      .collection("withdrawals");
+    const submissionsCollection = client
+      .db("MicroTaskHub")
+      .collection("submissions");
 
     app.get("/", (req, res) => {
       res.send("HEllo......");
@@ -234,6 +239,154 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to save submission",
+        });
+      }
+    });
+
+    //get Submission api
+    app.get("/submissions", async (req, res) => {
+      try {
+        const workerEmail = req.query.email;
+
+        const query = { worker_email: workerEmail };
+
+        const result = await submissionsCollection
+          .find(query)
+          .sort({ current_date: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch submissions" });
+      }
+    });
+
+    //get review request api with creator email
+    app.get("/review-requests", async (req, res) => {
+      try {
+        const creatorEmail = req.query.email;
+
+        const query = {
+          creator_email: creatorEmail,
+          status: "pending",
+        };
+
+        const result = await submissionsCollection.find(query).toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch review requests" });
+      }
+    });
+
+    // Update Submission Status (Approve / Reject)
+    app.patch("/update-submission-status/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { status } = req.body;
+
+        const submission = await submissionsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!submission) {
+          return res.status(404).send({ message: "Submission not found" });
+        }
+
+        if (submission.status !== "pending") {
+          return res.status(400).send({
+            message: "Submission already reviewed",
+          });
+        }
+
+        // 1️⃣ Update submission status
+        await submissionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } },
+        );
+
+        // 2️⃣ If approved → increase coin
+        if (status === "approved") {
+          await usersCollection.updateOne(
+            { email: submission.worker_email },
+            { $inc: { coins: parseInt(submission.payable_amount) } },
+          );
+        }
+
+        res.send({
+          success: true,
+          message: `Submission ${status}`,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Update failed" });
+      }
+    });
+
+    //post withdrawal request api
+    app.post("/withdraw", async (req, res) => {
+      try {
+        const {
+          worker_email,
+          worker_name,
+          withdraw_coin,
+          withdraw_amount,
+          payment_system,
+          account_number,
+        } = req.body;
+
+        // 1️⃣ Find worker
+        const user = await usersCollection.findOne({
+          email: worker_email,
+        });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const maxDollar = Math.floor(user.coins / 20);
+
+        // 2️⃣ Validate withdraw amount
+        if (withdraw_amount > maxDollar || withdraw_coin > user.coins) {
+          return res.status(400).send({
+            success: false,
+            message: "Withdraw amount exceeds limit",
+          });
+        }
+
+        // 3️⃣ Deduct coins
+        await usersCollection.updateOne(
+          { email: worker_email },
+          { $inc: { coins: -withdraw_coin } },
+        );
+
+        // 4️⃣ Insert withdraw record
+        const withdrawData = {
+          worker_email,
+          worker_name,
+          withdraw_coin,
+          withdraw_amount,
+          payment_system,
+          account_number,
+          withdraw_time: new Date(),
+        };
+
+        await withdrawCollection.insertOne(withdrawData);
+
+        res.send({
+          success: true,
+          message: "Withdraw Request Successful",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Withdraw failed",
         });
       }
     });
