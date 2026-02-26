@@ -37,6 +37,7 @@ async function run() {
 
     const usersCollection = client.db("MicroTaskHub").collection("users");
     const tasksCollection = client.db("MicroTaskHub").collection("tasks");
+    const submissionsCollection = client.db("MicroTaskHub").collection("submissions");
 
     app.get("/", (req, res) => {
       res.send("HEllo......");
@@ -213,6 +214,27 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Server Error" });
+      }
+    });
+
+    //post submission api
+    app.post("/submissions", async (req, res) => {
+      try {
+        const submission = req.body;
+
+        const result = await submissionsCollection.insertOne(submission);
+
+        res.status(201).send({
+          success: true,
+          message: "Submission saved successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to save submission",
+        });
       }
     });
 
