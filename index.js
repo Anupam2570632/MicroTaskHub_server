@@ -391,6 +391,54 @@ async function run() {
       }
     });
 
+    // Get all withdraw requests
+    app.get("/withdraw-requests", async (req, res) => {
+      try {
+        const result = await withdrawCollection
+          .find({})
+          .sort({ withdraw_time: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch withdraw requests" });
+      }
+    });
+
+    // Mark withdraw as success
+    app.patch("/withdraw-success/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const withdraw = await withdrawCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!withdraw) {
+          return res.status(404).send({ message: "Withdraw not found" });
+        }
+
+        // 1️⃣ Deduct coins from user
+        await usersCollection.updateOne(
+          { email: withdraw.worker_email },
+          { $inc: { coins: -withdraw.withdraw_coin } },
+        );
+
+        // 2️⃣ Delete withdraw request
+        await withdrawCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({
+          success: true,
+          message: "Payment Successful & Coins Deducted",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Payment failed" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
