@@ -39,6 +39,9 @@ async function run() {
     const usersCollection = client.db("MicroTaskHub").collection("users");
     const tasksCollection = client.db("MicroTaskHub").collection("tasks");
     const paymentsCollection = client.db("MicroTaskHub").collection("payments");
+    const notificationCollection = client
+      .db("MicroTaskHub")
+      .collection("notifications");
 
     const withdrawCollection = client
       .db("MicroTaskHub")
@@ -479,6 +482,22 @@ async function run() {
           );
         }
 
+        // 3️⃣ Create notification
+
+        const notification = {
+          type: status === "approved" ? "Task Approved" : "Task Rejected",
+          message:
+            status === "approved"
+              ? "Your submission has been approved!"
+              : "Your submission has been rejected!",
+          sender: "Admin",
+          receiver: submission.worker_email, // ✅ user email
+          createdAt: new Date(),
+          isRead: false,
+        };
+
+        await notificationCollection.insertOne(notification);
+
         res.send({
           success: true,
           message: `Submission ${status}`,
@@ -489,6 +508,33 @@ async function run() {
       }
     });
 
+    app.get("/notifications/:userId", async (req, res) => {
+      try {
+        const notifications = await notificationCollection
+          .find({ receiver: req.params.userId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(notifications);
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    app.patch("/notifications/mark-all-read/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        await notificationCollection.updateMany(
+          { receiver: email },
+          { $set: { isRead: true } },
+        );
+
+        res.send({ success: true });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
     //post withdrawal request api
     app.post("/withdraw", async (req, res) => {
       try {
@@ -569,39 +615,49 @@ async function run() {
       }
     });
 
-    // Mark withdraw as success
-    app.patch("/withdraw-success/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
+app.patch("/withdraw-success/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
 
-        const withdraw = await withdrawCollection.findOne({
-          _id: new ObjectId(id),
-        });
-
-        if (!withdraw) {
-          return res.status(404).send({ message: "Withdraw not found" });
-        }
-
-        // 1️⃣ Deduct coins from user
-        await usersCollection.updateOne(
-          { email: withdraw.worker_email },
-          { $inc: { coins: -withdraw.withdraw_coin } },
-        );
-
-        // 2️⃣ Delete withdraw request
-        await withdrawCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-
-        res.send({
-          success: true,
-          message: "Payment Successful & Coins Deducted",
-        });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Payment failed" });
-      }
+    const withdraw = await withdrawCollection.findOne({
+      _id: new ObjectId(id),
     });
+
+    if (!withdraw) {
+      return res.status(404).send({ message: "Withdraw not found" });
+    }
+
+    // 1️⃣ Deduct coins from user
+    await usersCollection.updateOne(
+      { email: withdraw.worker_email },
+      { $inc: { coins: -withdraw.withdraw_coin } }
+    );
+
+    // 2️⃣ Delete withdraw request
+    await withdrawCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    // 3️⃣ Create notification
+    await notificationCollection.insertOne({
+      type: "Withdrawal Successful",
+      message: `Your withdrawal of ${withdraw.withdraw_coin} coins has been processed successfully.`,
+      sender: "Admin",
+      receiver: withdraw.worker_email,
+      createdAt: new Date(),
+      isRead: false,
+    });
+
+    res.send({
+      success: true,
+      message: "Payment Successful & Coins Deducted",
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Payment failed" });
+  }
+});
 
     await client.db("admin").command({ ping: 1 });
     console.log(
