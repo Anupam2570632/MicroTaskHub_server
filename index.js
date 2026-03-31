@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const app = express();
+const SSLCommerzPayment = require("sslcommerz-lts");
 
 const port = 3000;
 require("dotenv").config();
@@ -37,6 +38,8 @@ async function run() {
 
     const usersCollection = client.db("MicroTaskHub").collection("users");
     const tasksCollection = client.db("MicroTaskHub").collection("tasks");
+    const paymentsCollection = client.db("MicroTaskHub").collection("payments");
+
     const withdrawCollection = client
       .db("MicroTaskHub")
       .collection("withdrawals");
@@ -46,6 +49,167 @@ async function run() {
 
     app.get("/", (req, res) => {
       res.send("HEllo......");
+    });
+
+    /**
+     * CREATE PAYMENT
+     */
+    app.post("/create-payment", async (req, res) => {
+      const { email, amount, coins, cus_name, cus_phone, cus_add1, cus_city } =
+        req.body;
+
+      const store_id = process.env.SSL_STORE_ID;
+      const store_passwd = process.env.SSL_STORE_PASS;
+      const is_live = false;
+
+      const tran_id = new Date().getTime().toString();
+
+      // 🔥 Save payment as pending (IMPORTANT)
+      await paymentsCollection.insertOne({
+        tran_id,
+        email,
+        coins: Number(coins), // ✅ FIX
+        amount: Number(amount),
+        status: "pending",
+        createdAt: new Date(),
+      });
+
+      const data = {
+        total_amount: amount,
+        currency: "BDT",
+        tran_id: tran_id,
+
+        success_url: `http://localhost:3000/payment-success?tran_id=${tran_id}`,
+        fail_url: `http://localhost:3000/payment-fail`,
+        cancel_url: `http://localhost:3000/payment-cancel`,
+        ipn_url: `http://localhost:3000/ipn`,
+
+        shipping_method: "Courier",
+        product_name: "Coin Purchase",
+        product_category: "Digital",
+        product_profile: "general",
+
+        // customer
+        cus_name: cus_name || "Customer",
+        cus_email: email,
+        cus_add1: cus_add1 || "Dhaka",
+        cus_city: cus_city || "Dhaka",
+        cus_country: "Bangladesh",
+        cus_phone: cus_phone || "01700000000",
+
+        // shipping (REQUIRED)
+        ship_name: cus_name || "Customer",
+        ship_add1: cus_add1 || "Dhaka",
+        ship_city: cus_city || "Dhaka",
+        ship_state: cus_city || "Dhaka",
+        ship_postcode: "1000",
+        ship_country: "Bangladesh",
+      };
+
+      const SSLCommerzPayment = require("sslcommerz-lts");
+      const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
+
+      try {
+        const apiResponse = await sslcz.init(data);
+        res.json(apiResponse);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Payment init failed" });
+      }
+    });
+    app.all("/payment-success", async (req, res) => {
+      const data =
+        req.body && Object.keys(req.body).length ? req.body : req.query;
+
+      const { tran_id, val_id } = data;
+
+      try {
+        console.log("DATA:", data);
+
+        // 🔥 Find pending payment
+        const payment = await paymentsCollection.findOne({ tran_id });
+
+        if (!payment) {
+          console.log("Payment not found");
+          return res.redirect("http://localhost:5173/dashboard/payment-fail");
+        }
+
+        // 🔥 Prevent duplicate
+        if (payment.status === "success") {
+          console.log("Already processed");
+          return res.redirect(
+            "http://localhost:5173/dashboard/payment-success",
+          );
+        }
+
+        const store_id = process.env.SSL_STORE_ID;
+        const store_passwd = process.env.SSL_STORE_PASS;
+
+        // 🔥 Optional validation (if val_id exists)
+        if (val_id) {
+          const axios = require("axios");
+
+          const validationURL = `https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?val_id=${val_id}&store_id=${store_id}&store_passwd=${store_passwd}&format=json`;
+
+          const response = await axios.get(validationURL);
+          const validated = response.data;
+
+          console.log("VALIDATED:", validated);
+
+          if (
+            validated.status !== "VALID" &&
+            validated.status !== "VALIDATED"
+          ) {
+            return res.redirect("http://localhost:5173/dashboard/payment-fail");
+          }
+        }
+
+        // 🔥 Convert coins safely
+        const coinAmount = Number(payment.coins);
+
+        console.log("Coins to add:", coinAmount);
+
+        // 🔥 Update payment status
+        await paymentsCollection.updateOne(
+          { tran_id },
+          { $set: { status: "success" } },
+        );
+
+        // 🔥 Update user coins
+        await usersCollection.updateOne(
+          { email: payment.email },
+          { $inc: { coins: coinAmount } },
+        );
+
+        console.log("Coins added successfully");
+
+        res.redirect("http://localhost:5173/dashboard/payment-success");
+      } catch (error) {
+        console.error(error);
+        res.redirect("http://localhost:5173/dashboard/payment-fail");
+      }
+    });
+    /**
+     * FAIL CALLBACK
+     */
+    app.post("/payment-fail", (req, res) => {
+      console.log("Payment Failed");
+      res.redirect("http://localhost:5173/dashboard/payment-fail");
+    });
+    /**
+     * CANCEL CALLBACK
+     */
+    app.post("/payment-cancel", (req, res) => {
+      console.log("Payment Cancelled");
+      res.send("Payment cancelled");
+    });
+
+    /**
+     * IPN (optional)
+     */
+    app.post("/ipn", (req, res) => {
+      console.log("IPN:", req.body);
+      res.send("IPN received");
     });
 
     app.post("/users", async (req, res) => {
